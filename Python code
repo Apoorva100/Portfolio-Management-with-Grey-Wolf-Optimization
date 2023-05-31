@@ -1,0 +1,149 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
+from tensorflow import keras
+
+df = pd.read_csv(' ')
+
+# Extract the closing price of each stock
+stocks = df['Stock'].unique()
+close_price = {}
+for stock in stocks:
+    close_price[stock] = df[df['Stock'] == stock]['Close'].values.reshape(-1, 1)
+
+# Calculate the daily returns of each stock
+returns = {}
+for stock in stocks:
+    returns[stock] = np.diff(close_price[stock], axis=0) / close_price[stock][:-1]
+
+# Normalize the daily returns using the MinMaxScaler
+scaler = MinMaxScaler()
+for stock in stocks:
+    returns[stock] = scaler.fit_transform(returns[stock])
+
+
+#Sharpe Ratio
+def sharpe_ratio(weights, returns):
+    portfolio_returns = np.zeros(returns[stocks[0]].shape)
+    for stock in stocks:
+        portfolio_returns += weights[stock] * returns[stock]
+    portfolio_mean_return = np.mean(portfolio_returns)
+    portfolio_std_return = np.std(portfolio_returns)
+    return -portfolio_mean_return / portfolio_std_return
+
+
+def pso(returns, population_size=30, iterations=100):
+    # Initialization
+    positions = np.random.rand(population_size, len(stocks))
+    fitness = np.zeros(population_size)
+    for i in range(population_size):
+        weights = {}
+        for j, stock in enumerate(stocks):
+            weights[stock] = positions[i][j] / np.sum(positions[i])
+        fitness[i] = sharpe_ratio(weights, returns)
+
+    # Fitness evaluation
+    for t in range(iterations):
+        # Update the particles
+        for i in range(population_size):
+            # Update the velocity of each particle
+            velocity = np.zeros(len(stocks))
+            for j in range(len(stocks)):
+                # Cognitive component
+                c1 = 2 * np.random.random() - 1
+                # Social component
+                c2 = 2 * np.random.random() - 1
+                # Personal best
+                p_best = positions[i][j]
+                # Global best
+                g_best = np.max(positions[:, j])
+                velocity[j] = c1 * (p_best - positions[i][j]) + c2 * (g_best - positions[i][j])
+
+            # Update the position of each particle
+            positions[i] = positions[i] + velocity
+
+            # Handle the boundaries
+            positions[i] = np.clip(positions[i], 0, 1)
+
+            # Evaluate fitness
+            weights = {}
+            for j, stock in enumerate(stocks):
+                weights[stock] = positions[i][j] / np.sum(positions[i])
+            fitness[i] = sharpe_ratio(weights, returns)
+
+        # Find the global best
+        g_best_index = np.argmax(fitness)
+        g_best = positions[g_best_index]
+
+        # Print the best fitness value achieved in each iteration
+        print("Iteration {}: Best fitness = {}".format(t+1, fitness[g_best_index]))    
+
+    # Calculate optimal weights
+    weights = {}
+    for j, stock in enumerate(stocks):
+        weights[stock] = g_best[j] / np.sum(g_best)
+    return weights
+
+
+# Set the hyperparameters
+population_size = 10
+iterations = 100
+
+#Build the feedforward neural network with 1 hidden layer which has 100 neurons
+model = keras.Sequential([
+keras.layers.Dense(100, activation='relu', input_shape=(len(stocks),)),
+keras.layers.Dense(len(stocks), activation='softmax')
+])
+
+#Compile the model
+model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+# Train the model
+for i in range(10):
+    # Generate a random population of weights
+    positions = np.random.rand(population_size, len(stocks))
+    for j in range(population_size):
+        positions[j] = positions[j] / np.sum(positions[j])
+    # Optimize the weights using GWO
+    weights = pso(returns, population_size=population_size, iterations=100)
+    # Convert the weights to one-hot encoding
+    y = np.zeros((population_size, len(stocks)))
+    for j, stock in enumerate(stocks):
+        y[:, j] = weights[stock]
+    # Train the model
+    model.fit(positions, y, epochs=1, verbose=0)
+
+
+# Predict the optimal weights using the trained model
+positions = np.random.rand(10, len(stocks))
+weights = model.predict(positions)
+
+# Calculate the percentage allocation in each stock
+total_weight = np.sum(weights, axis=1)
+percent_allocation = weights / total_weight[:, np.newaxis]
+
+# Calculate the final portfolio value using the optimal weights
+initial_value = 1000
+portfolio_value = initial_value
+for j, stock in enumerate(stocks):
+    shares = percent_allocation[:, j] * portfolio_value / close_price[stock][-1][0]
+    portfolio_value = np.sum(shares * close_price[stock][-1][0])
+    
+# Print the percentage allocation in each stock
+allocation = []
+for j, stock in enumerate(stocks):
+    allocation.append(percent_allocation[-1, j] * 100)
+    print("{}: {:.2f}%".format(stock, percent_allocation[-1, j] * 100))
+    
+# Print the final portfolio value
+print("Final portfolio value = ${:.2f}".format(portfolio_value))
+
+# Create a bar graph of stock vs percentage allocation
+fig, ax = plt.subplots()
+ax.bar(stocks, allocation)
+ax.set_xlabel('Stock')
+ax.set_ylabel('Percentage Allocation')
+ax.set_title('Optimal Portfolio Allocation')
+plt.show()
